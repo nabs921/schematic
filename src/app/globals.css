@@ -1,0 +1,119 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+:root {
+  --background: #0a0a0a;
+  --foreground: #e5e5e5;
+  --card: #141414;
+  --card-foreground: #e5e5e5;
+  --popover: #141414;
+  --popover-foreground: #e5e5e5;
+  --primary: #4f4f4f;
+  --primary-foreground: #ffffff;
+  --secondary: #1a1a1a;
+  --secondary-foreground: #e5e5e5;
+  --muted: #1a1a1a;
+  --muted-foreground: #737373;
+  --accent: #262626;
+  --accent-foreground: #e5e5e5;
+  --destructive: #dc2626;
+  --destructive-foreground: #ffffff;
+  --border: #262626;
+  --input: #262626;
+  --ring: #525252;
+  --radius: 0.5rem;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Match Sonner's default toast surface to the zinc dialogs and popovers. */
+[data-sonner-toaster][data-sonner-theme='dark'] {
+  --normal-bg: #18181b;
+  --normal-bg-hover: #27272a;
+  --normal-border: #27272a;
+  --normal-border-hover: #3f3f46;
+  --normal-text: #e4e4e7;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0a0a0a;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #404040;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #525252;
+}
+
+/* React Flow custom styling */
+.react-flow__attribution {
+  display: none !important;
+}
+
+.react-flow__minimap {
+  background-color: #141414 !important;
+  border: 1px solid #262626 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+}
+
+.react-flow__controls {
+  background-color: #141414 !important;
+  border: 1px solid #262626 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5) !important;
+  overflow: hidden;
+}
+
+.react-flow__controls-button {
+  background-color: #141414 !important;
+  border-bottom: 1px solid #262626 !important;
+  fill: #737373 !important;
+  color: #737373 !important;
+}
+
+.react-flow__controls-button:hover {
+  background-color: #1a1a1a !important;
+  fill: #e5e5e5 !important;
+  color: #e5e5e5 !important;
+}
+
+/* CodeMirror 6 custom styling */
+.cm-editor {
+  height: 100%;
+  font-family: "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+  background-color: #0a0a0a !important;
+}
+
+.cm-gutters {
+  background-color: #141414 !important;
+  color: #525252 !important;
+  border-right: 1px solid #262626 !important;
+}
+
+.cm-activeLineGutter {
+  background-color: #1a1a1a !important;
+  color: #737373 !important;
+}
+
+.cm-activeLine {
+  background-color: rgba(79, 79, 79, 0.1) !important;
+}
