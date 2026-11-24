@@ -10,6 +10,7 @@ import { FileWithDetails } from "@/lib/db/queries/files";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,7 @@ import {
 } from "lucide-react";
 import { formatRelativeDate } from "@/lib/utils";
 import { SCHEMA_TEMPLATES } from "@/lib/workspace/templates";
+import { type SqlDialect, DIALECT_OPTIONS } from "@/lib/sql/dialects";
 import { ShareDialog } from "@/components/collaboration/share-dialog";
 import { NotificationsMenu } from "@/components/dashboard/notifications-menu";
 import type { ShareNotification } from "@/lib/db/queries/notifications";
@@ -102,6 +104,7 @@ export function DashboardView({
   const [isNewFileOpen, setIsNewFileOpen] = useState(false);
   const [newFileName, setNewFileName] = useState("");
   const [selectedTemplate, setSelectedTemplate] = useState("ecommerce");
+  const [selectedDialect, setSelectedDialect] = useState<SqlDialect>("postgres");
 
   const [isNewFolderOpen, setIsNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -133,6 +136,9 @@ export function DashboardView({
   } | null>(null);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+  const [creatingFromTemplate, setCreatingFromTemplate] = useState<string | null>(null);
+  const [duplicatingFileId, setDuplicatingFileId] = useState<string | null>(null);
 
   // Filtered files & folders
   const folderIds = new Set(folders.map((folder) => folder.id));
@@ -161,10 +167,12 @@ export function DashboardView({
       formData.set("name", newFileName);
       if (currentFolderId) formData.set("folderId", currentFolderId);
       formData.set("templateKey", selectedTemplate);
+      formData.set("dialect", selectedDialect);
 
       const res = await createFileAction(formData);
       setIsNewFileOpen(false);
       setNewFileName("");
+      setSelectedDialect("postgres");
       router.push(`/schema/${res.fileId}`);
     } catch (err) {
       toast.error(getErrorMessage(err, "Failed to create schema"));
@@ -250,11 +258,44 @@ export function DashboardView({
   };
 
   const handleDuplicate = async (fileId: string) => {
+    setDuplicatingFileId(fileId);
     try {
       const res = await duplicateFileAction(fileId);
       router.push(`/schema/${res.fileId}`);
     } catch (err) {
       toast.error(getErrorMessage(err, "Duplicate failed"));
+    } finally {
+      setDuplicatingFileId(null);
+    }
+  };
+
+  const handleTemplateCreate = async (templateKey: string) => {
+    if (creatingFromTemplate) return;
+    setCreatingFromTemplate(templateKey);
+    try {
+      const formData = new FormData();
+      const template = SCHEMA_TEMPLATES.find((tmpl) => tmpl.key === templateKey);
+      formData.set("name", template?.name ?? "Untitled Schema");
+      if (currentFolderId) formData.set("folderId", currentFolderId);
+      formData.set("templateKey", templateKey);
+
+      const res = await createFileAction(formData);
+      router.push(`/schema/${res.fileId}`);
+    } catch (err) {
+      toast.error(getErrorMessage(err, "Failed to create schema from template"));
+    } finally {
+      setCreatingFromTemplate(null);
+    }
+  };
+
+  const handleLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await logout();
+    } catch {
+      setIsLoggingOut(false);
+      toast.error("Failed to sign out");
     }
   };
 
@@ -310,10 +351,16 @@ export function DashboardView({
                 <DropdownMenuLabel className="text-xs">Account</DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  onClick={() => logout()}
+                  onClick={() => void handleLogout()}
+                  disabled={isLoggingOut}
                   className="text-red-400 focus:text-red-300"
                 >
-                  <LogOut className="h-3.5 w-3.5 mr-2" /> Sign out
+                  {isLoggingOut ? (
+                    <Spinner className="mr-2 text-red-400" />
+                  ) : (
+                    <LogOut className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {isLoggingOut ? "Signing out..." : "Sign out"}
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -645,24 +692,25 @@ export function DashboardView({
                     {SCHEMA_TEMPLATES.map((tmpl) => (
                       <button
                         key={tmpl.key}
-                        onClick={async () => {
-                          const formData = new FormData();
-                          formData.set("name", `${tmpl.name}`);
-                          if (currentFolderId) formData.set("folderId", currentFolderId);
-                          formData.set("templateKey", tmpl.key);
-                          const res = await createFileAction(formData);
-                          router.push(`/schema/${res.fileId}`);
-                        }}
-                        className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/80 hover:border-zinc-700 transition-all text-left group"
+                        type="button"
+                        onClick={() => void handleTemplateCreate(tmpl.key)}
+                        disabled={creatingFromTemplate !== null}
+                        className="p-3.5 rounded-xl border border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800/80 hover:border-zinc-700 transition-all text-left group disabled:pointer-events-none disabled:opacity-60"
                       >
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-semibold text-zinc-200 group-hover:text-zinc-100">
                             {tmpl.name}
                           </span>
-                          <ArrowRight className="h-3.5 w-3.5 text-zinc-500 group-hover:text-zinc-400 group-hover:translate-x-0.5 transition-all" />
+                          {creatingFromTemplate === tmpl.key ? (
+                            <Spinner className="h-3.5 w-3.5 text-indigo-400" />
+                          ) : (
+                            <ArrowRight className="h-3.5 w-3.5 text-zinc-500 group-hover:text-zinc-400 group-hover:translate-x-0.5 transition-all" />
+                          )}
                         </div>
                         <p className="text-[11px] text-zinc-500 mt-1 line-clamp-2">
-                          {tmpl.description}
+                          {creatingFromTemplate === tmpl.key
+                            ? "Creating schema..."
+                            : tmpl.description}
                         </p>
                       </button>
                     ))}
@@ -716,8 +764,16 @@ export function DashboardView({
                               >
                                 <Share2 className="h-3.5 w-3.5 mr-2" /> Share &amp; Permissions
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleDuplicate(file.id)}>
-                                <Copy className="h-3.5 w-3.5 mr-2" /> Duplicate
+                              <DropdownMenuItem
+                                onClick={() => void handleDuplicate(file.id)}
+                                disabled={duplicatingFileId === file.id}
+                              >
+                                {duplicatingFileId === file.id ? (
+                                  <Spinner className="mr-2" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5 mr-2" />
+                                )}
+                                {duplicatingFileId === file.id ? "Duplicating..." : "Duplicate"}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => {
@@ -837,8 +893,16 @@ export function DashboardView({
                               >
                                 <Share2 className="h-3.5 w-3.5 mr-2" /> Share
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => handleDuplicate(file.id)}>
-                                <Copy className="h-3.5 w-3.5 mr-2" /> Duplicate
+                              <DropdownMenuItem
+                                onClick={() => void handleDuplicate(file.id)}
+                                disabled={duplicatingFileId === file.id}
+                              >
+                                {duplicatingFileId === file.id ? (
+                                  <Spinner className="mr-2" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5 mr-2" />
+                                )}
+                                {duplicatingFileId === file.id ? "Duplicating..." : "Duplicate"}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() => {
@@ -900,6 +964,27 @@ export function DashboardView({
               />
             </div>
 
+            <div className="space-y-1.5">
+              <label className="text-xs font-medium text-zinc-300">Database Dialect</label>
+              <div className="grid grid-cols-3 gap-1.5">
+                {DIALECT_OPTIONS.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setSelectedDialect(d.id)}
+                    className={`px-2.5 py-1.5 rounded-lg border text-left transition-all text-xs font-medium ${
+                      selectedDialect === d.id
+                        ? "border-indigo-500 bg-indigo-950/50 text-white"
+                        : "border-zinc-800 bg-zinc-900/60 text-zinc-400 hover:text-zinc-200"
+                    }`}
+                  >
+                    <p className="font-semibold text-[11px] truncate">{d.badgeLabel}</p>
+                    <p className="text-[9px] text-zinc-400 truncate opacity-80">{d.shortName}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="space-y-2">
               <label className="text-xs font-medium text-zinc-300">Starter Template</label>
               <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
@@ -933,7 +1018,14 @@ export function DashboardView({
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting || !newFileName.trim()}>
-                {isSubmitting ? "Creating..." : "Create Schema"}
+                {isSubmitting ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Schema"
+                )}
               </Button>
             </DialogFooter>
           </form>
@@ -972,7 +1064,14 @@ export function DashboardView({
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting || !newFolderName.trim()}>
-                {isSubmitting ? "Creating..." : "Create Folder"}
+                {isSubmitting ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Creating...
+                  </>
+                ) : (
+                  "Create Folder"
+                )}
               </Button>
             </DialogFooter>
           </form>
@@ -1004,7 +1103,14 @@ export function DashboardView({
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting || !renameValue.trim()}>
-                {isSubmitting ? "Saving..." : "Rename"}
+                {isSubmitting ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Saving...
+                  </>
+                ) : (
+                  "Rename"
+                )}
               </Button>
             </DialogFooter>
           </form>
@@ -1063,7 +1169,14 @@ export function DashboardView({
                 Cancel
               </Button>
               <Button type="submit" disabled={isSubmitting}>
-                {isSubmitting ? "Moving..." : "Move"}
+                {isSubmitting ? (
+                  <>
+                    <Spinner className="mr-2" />
+                    Moving...
+                  </>
+                ) : (
+                  "Move"
+                )}
               </Button>
             </DialogFooter>
           </form>
@@ -1096,7 +1209,14 @@ export function DashboardView({
               onClick={handleDelete}
               disabled={isSubmitting}
             >
-              {isSubmitting ? "Deleting..." : "Delete"}
+              {isSubmitting ? (
+                <>
+                  <Spinner className="mr-2" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete"
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

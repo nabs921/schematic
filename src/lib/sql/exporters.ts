@@ -1,5 +1,6 @@
 import { ModelExporter, Parser, exporter } from '@dbml/core';
 import type { ColumnDefinition, ParsedSchema } from './parser';
+import type { SqlDialect } from './dialects';
 
 export interface ProjectExportInput {
   name: string;
@@ -9,18 +10,70 @@ export interface ProjectExportInput {
 }
 
 /**
- * Convert PostgreSQL DDL into DBML using @dbml/core's model exporter.
+ * Convert SQL DDL of any supported dialect into DBML using @dbml/core's model exporter.
  */
-export function exportDbmlFromSql(sql: string): string {
-  const database = Parser.parse(sql, 'postgres');
+export function exportDbmlFromSql(sql: string, dialect: SqlDialect = 'postgres'): string {
+  if (dialect === 'sqlite') {
+    const normalized = sql
+      .replace(/\bAUTOINCREMENT\b/gi, '')
+      .replace(/\bWITHOUT\s+ROWID\b/gi, '')
+      .replace(/\bSTRICT\b/gi, '');
+    try {
+      const database = Parser.parse(normalized, 'postgres');
+      return ModelExporter.export(database, 'dbml');
+    } catch {
+      const database = Parser.parse(normalized, 'mysql');
+      return ModelExporter.export(database, 'dbml');
+    }
+  }
+
+  const dbmlFormat = dialect === 'postgres' ? 'postgres' : dialect;
+  const database = Parser.parse(sql, dbmlFormat);
   return ModelExporter.export(database, 'dbml');
 }
 
 /**
- * Convert DBML into PostgreSQL DDL.
+ * Convert DBML into SQL DDL for the specified dialect.
  */
-export function importDbmlToSql(dbml: string): string {
-  return exporter.export(dbml, 'postgres');
+export function importDbmlToSql(dbml: string, dialect: SqlDialect = 'postgres'): string {
+  if (dialect === 'sqlite') {
+    const pg = exporter.export(dbml, 'postgres');
+    return pg
+      .replace(/"(\w+)" SERIAL PRIMARY KEY/g, '$1 INTEGER PRIMARY KEY AUTOINCREMENT')
+      .replace(/\bSERIAL\b/gi, 'INTEGER')
+      .replace(/\bUUID\b/gi, 'TEXT')
+      .replace(/\bTIMESTAMPTZ\b/gi, 'DATETIME')
+      .replace(/\bTIMESTAMP WITH TIME ZONE\b/gi, 'DATETIME')
+      .replace(/\bBOOLEAN\b/gi, 'INTEGER')
+      .replace(/"/g, '`');
+  }
+
+  const exportFormat = dialect === 'postgres' ? 'postgres' : dialect;
+  return exporter.export(dbml, exportFormat);
+}
+
+/**
+ * Convert SQL DDL from one database dialect to another.
+ */
+export function convertSqlDialect(
+  sql: string,
+  fromDialect: SqlDialect,
+  toDialect: SqlDialect
+): string {
+  if (fromDialect === toDialect) return sql;
+  const dbml = exportDbmlFromSql(sql, fromDialect);
+  return importDbmlToSql(dbml, toDialect);
+}
+
+/**
+ * Export SQL to a target dialect, converting if source and target differ.
+ */
+export function exportDialectSql(
+  sql: string,
+  sourceDialect: SqlDialect,
+  targetDialect: SqlDialect
+): string {
+  return convertSqlDialect(sql, sourceDialect, targetDialect);
 }
 
 /** Sanitise a SQL identifier into something Mermaid accepts. */

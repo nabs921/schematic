@@ -54,6 +54,8 @@ function typeBadgeClass(type: string): string {
       'int2',
       'int4',
       'int8',
+      'tinyint',
+      'mediumint',
       'smallint',
       'bigint',
       'serial',
@@ -61,15 +63,19 @@ function typeBadgeClass(type: string): string {
       'smallserial',
       'numeric',
       'decimal',
+      'number',
       'real',
       'float',
       'float4',
       'float8',
       'double',
+      'double precision',
       'money',
+      'smallmoney',
     ].includes(normalized) ||
     normalized.startsWith('numeric') ||
-    normalized.startsWith('decimal')
+    normalized.startsWith('decimal') ||
+    normalized.startsWith('number')
   ) {
     return `${TYPE_BADGE_BASE} border-amber-500/40 bg-amber-500/10 text-amber-300`;
   }
@@ -77,10 +83,17 @@ function typeBadgeClass(type: string): string {
   if (
     [
       'varchar',
+      'varchar2',
+      'nvarchar',
+      'nvarchar2',
       'character varying',
       'char',
+      'nchar',
       'character',
       'text',
+      'ntext',
+      'clob',
+      'nclob',
       'tinytext',
       'mediumtext',
       'longtext',
@@ -92,7 +105,7 @@ function typeBadgeClass(type: string): string {
     return `${TYPE_BADGE_BASE} border-emerald-500/40 bg-emerald-500/10 text-emerald-300`;
   }
 
-  if (['bool', 'boolean'].includes(normalized)) {
+  if (['bool', 'boolean', 'bit'].includes(normalized)) {
     return `${TYPE_BADGE_BASE} border-rose-500/40 bg-rose-500/10 text-rose-300`;
   }
 
@@ -103,11 +116,16 @@ function typeBadgeClass(type: string): string {
       'timetz',
       'timestamp',
       'timestamptz',
-      'interval',
       'datetime',
+      'datetime2',
+      'smalldatetime',
+      'datetimeoffset',
+      'year',
+      'interval',
     ].includes(normalized) ||
     normalized.startsWith('timestamp') ||
-    normalized.startsWith('time')
+    normalized.startsWith('time') ||
+    normalized.startsWith('datetime')
   ) {
     return `${TYPE_BADGE_BASE} border-cyan-500/40 bg-cyan-500/10 text-cyan-300`;
   }
@@ -116,7 +134,20 @@ function typeBadgeClass(type: string): string {
     return `${TYPE_BADGE_BASE} border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-300`;
   }
 
-  if (['bytea', 'binary', 'varbinary', 'blob'].includes(normalized)) {
+  if (
+    [
+      'bytea',
+      'binary',
+      'varbinary',
+      'blob',
+      'tinyblob',
+      'mediumblob',
+      'longblob',
+      'image',
+      'raw',
+      'long raw',
+    ].includes(normalized)
+  ) {
     return `${TYPE_BADGE_BASE} border-orange-500/40 bg-orange-500/10 text-orange-300`;
   }
 

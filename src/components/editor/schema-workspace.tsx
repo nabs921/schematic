@@ -21,6 +21,11 @@ import { getCollabRoomName, getCollabServerUrl } from '@/lib/collab/config';
 import * as Y from 'yjs';
 import { WebsocketProvider } from 'y-websocket';
 import {
+  type SqlDialect,
+  SUPPORTED_DIALECTS,
+  DIALECT_OPTIONS,
+} from '@/lib/sql/dialects';
+import {
   exportDbmlFromSql,
   exportDrizzle,
   exportMermaid,
@@ -30,6 +35,7 @@ import {
 import { toPng, toSvg } from 'html-to-image';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,6 +58,8 @@ import {
   Workflow,
   Image as ImageIcon,
   Upload,
+  ChevronDown,
+  Check,
 } from 'lucide-react';
 import { saveFileStateAction, renameFileAction, checkFileAccessAction } from '@/lib/workspace/actions';
 
@@ -68,6 +76,7 @@ interface WorkspaceDraft {
   sql: string;
   notes: CanvasNote[];
   positions: Record<string, { x: number; y: number }>;
+  dialect?: SqlDialect;
   savedAt: number;
 }
 
@@ -77,7 +86,7 @@ interface CollabSession {
   ytext: Y.Text;
   positionsMap: Y.Map<{ x: number; y: number }>;
   notesMap: Y.Map<CanvasNote>;
-  metaMap: Y.Map<boolean>;
+  metaMap: Y.Map<unknown>;
   commentsMap: Y.Map<number>;
 }
 
@@ -160,9 +169,16 @@ function WorkspaceInner({
   // only updates `sqlContent` and never re-creates the editor.
   const [editorSeed, setEditorSeed] = useState(file.sql_content);
 
+  const initialDialect: SqlDialect =
+    (readDraft(file.id)?.dialect || file.canvas_data?.dialect || 'postgres') as SqlDialect;
+  const [dialect, setDialect] = useState<SqlDialect>(
+    initialDialect in SUPPORTED_DIALECTS ? initialDialect : 'postgres'
+  );
+  const dialectRef = useRef<SqlDialect>(dialect);
+
   // Parse SQL during render instead of in an effect. When the SQL is invalid we
   // keep showing the last successfully parsed schema in the diagram.
-  const parseResult = useMemo(() => parseSqlSchema(sqlContent), [sqlContent]);
+  const parseResult = useMemo(() => parseSqlSchema(sqlContent, dialect), [sqlContent, dialect]);
   const [lastValidParsedSchema, setLastValidParsedSchema] = useState<ParsedSchema | null>(null);
   if (
     parseResult.success &&
@@ -184,6 +200,8 @@ function WorkspaceInner({
   const [isOnline, setIsOnline] = useState(true);
   const [isShareOpen, setIsShareOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isRenamingTitle, setIsRenamingTitle] = useState(false);
+  const [exportingFormat, setExportingFormat] = useState<string | null>(null);
 
   // Local Yjs collaboration session and presence state.
   const [collab, setCollab] = useState<CollabSession | null>(null);
@@ -239,7 +257,7 @@ function WorkspaceInner({
       ytext: doc.getText('codemirror'),
       positionsMap: doc.getMap<{ x: number; y: number }>('positions'),
       notesMap: doc.getMap<CanvasNote>('notes'),
-      metaMap: doc.getMap<boolean>('meta'),
+      metaMap: doc.getMap<unknown>('meta'),
       commentsMap: doc.getMap<number>('comments'),
     });
 
@@ -331,14 +349,17 @@ function WorkspaceInner({
     (
       newSql: string,
       newNotes: CanvasNote[],
-      newPositions: Record<string, { x: number; y: number }>
+      newPositions: Record<string, { x: number; y: number }>,
+      newDialect?: SqlDialect
     ) => {
       if (isReadOnly) return;
+      const activeDialect = newDialect || dialectRef.current;
 
       writeDraft(file.id, {
         sql: newSql,
         notes: newNotes,
         positions: newPositions,
+        dialect: activeDialect,
         savedAt: Date.now(),
       });
       setSaveStatus('saving');
@@ -352,6 +373,7 @@ function WorkspaceInner({
           await saveFileStateAction(file.id, newSql, {
             notes: newNotes,
             positions: newPositions,
+            dialect: activeDialect,
           });
           clearDraft(file.id);
           setSaveStatus('saved');
@@ -427,7 +449,7 @@ function WorkspaceInner({
     setTablePositions(draft.positions);
     setSaveStatus('unsaved');
 
-    triggerAutoSave(draft.sql, draft.notes, draft.positions);
+    triggerAutoSave(draft.sql, draft.notes, draft.positions, draft.dialect);
   }, [file.id, file.updated_at, isReadOnly, triggerAutoSave]);
 
   // Seed the shared document from PostgreSQL/local data once, then keep React
@@ -456,6 +478,17 @@ function WorkspaceInner({
     };
     const syncCommentsVersion = () => {
       setCommentsVersion(commentsMap.get('version') ?? 0);
+    };
+    const syncDialect = () => {
+      const remoteDialect = metaMap.get('dialect') as SqlDialect | undefined;
+      if (
+        remoteDialect &&
+        remoteDialect !== dialectRef.current &&
+        remoteDialect in SUPPORTED_DIALECTS
+      ) {
+        dialectRef.current = remoteDialect;
+        setDialect(remoteDialect);
+      }
     };
     const handleCommentsChange = (
       _event: Y.YMapEvent<number>,
@@ -491,6 +524,7 @@ function WorkspaceInner({
           }
 
           metaMap.set('seeded', true);
+          metaMap.set('dialect', dialectRef.current);
         });
       }
 
@@ -498,11 +532,13 @@ function WorkspaceInner({
       positionsMap.observe(syncPositions);
       notesMap.observe(syncNotes);
       commentsMap.observe(handleCommentsChange);
+      metaMap.observe(syncDialect);
 
       syncText();
       syncPositions();
       syncNotes();
       syncCommentsVersion();
+      syncDialect();
       setIsYjsReady(true);
     };
 
@@ -529,6 +565,7 @@ function WorkspaceInner({
       positionsMap.unobserve(syncPositions);
       notesMap.unobserve(syncNotes);
       commentsMap.unobserve(handleCommentsChange);
+      metaMap.unobserve(syncDialect);
     };
   }, [collab, file.id, file.sql_content]);
 
@@ -625,14 +662,18 @@ function WorkspaceInner({
 
   // Handle Title Rename
   const handleTitleSubmit = async () => {
+    if (isRenamingTitle) return;
     setIsEditingTitle(false);
     if (!titleInput.trim() || titleInput === fileName) return;
+    setIsRenamingTitle(true);
     try {
       await renameFileAction(file.id, titleInput.trim());
       setFileName(titleInput.trim());
     } catch {
       toast.error('Failed to rename schema');
       setTitleInput(fileName);
+    } finally {
+      setIsRenamingTitle(false);
     }
   };
 
@@ -779,8 +820,24 @@ function WorkspaceInner({
     URL.revokeObjectURL(url);
   };
 
+  const handleDialectSelect = (newDialect: SqlDialect) => {
+    if (isReadOnly || newDialect === dialect) return;
+
+    dialectRef.current = newDialect;
+    setDialect(newDialect);
+
+    if (collab) {
+      collab.doc.transact(() => {
+        collab.metaMap.set('dialect', newDialect);
+      });
+    }
+
+    triggerAutoSave(sqlContentRef.current, notesRef.current, positionsRef.current, newDialect);
+    toast.success(`Dialect switched to ${SUPPORTED_DIALECTS[newDialect].name}`);
+  };
+
   const handleImportSql = useCallback(
-    (nextSql: string) => {
+    (nextSql: string, importedDialect?: SqlDialect) => {
       if (isReadOnly) {
         toast.error('You do not have permission to import into this schema.');
         return;
@@ -790,16 +847,26 @@ function WorkspaceInner({
         return;
       }
 
+      const targetDialect = importedDialect || dialectRef.current;
+
       // Y.Text is the collaborative source of truth, so an import replaces it
       // inside a Yjs transaction instead of only changing local state.
       collab.doc.transact(() => {
         collab.ytext.delete(0, collab.ytext.length);
         collab.ytext.insert(0, nextSql);
+        if (importedDialect) {
+          collab.metaMap.set('dialect', importedDialect);
+        }
       }, 'import-schema');
+
+      if (importedDialect && importedDialect !== dialectRef.current) {
+        dialectRef.current = importedDialect;
+        setDialect(importedDialect);
+      }
 
       sqlContentRef.current = nextSql;
       setSqlContent(nextSql);
-      triggerAutoSave(nextSql, notesRef.current, positionsRef.current);
+      triggerAutoSave(nextSql, notesRef.current, positionsRef.current, targetDialect);
     },
     [collab, isReadOnly, isYjsReady, triggerAutoSave]
   );
@@ -813,13 +880,18 @@ function WorkspaceInner({
       return;
     }
 
+    setExportingFormat(format);
     try {
       switch (format) {
         case 'sql':
           downloadFile(`${fileSlug}.sql`, sqlContent, 'text/plain;charset=utf-8');
           break;
         case 'dbml':
-          downloadFile(`${fileSlug}.dbml`, exportDbmlFromSql(sqlContent), 'text/plain;charset=utf-8');
+          downloadFile(
+            `${fileSlug}.dbml`,
+            exportDbmlFromSql(sqlContent, dialect),
+            'text/plain;charset=utf-8'
+          );
           break;
         case 'mermaid':
           if (!parsedSchema) return;
@@ -872,6 +944,8 @@ function WorkspaceInner({
     } catch (err) {
       console.error('Export failed:', err);
       toast.error(err instanceof Error ? err.message : `Failed to export ${format.toUpperCase()}`);
+    } finally {
+      setExportingFormat(null);
     }
   };
 
@@ -911,11 +985,12 @@ function WorkspaceInner({
                 onBlur={handleTitleSubmit}
                 onKeyDown={(e) => e.key === 'Enter' && handleTitleSubmit()}
                 autoFocus
-                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-0.5 text-sm font-semibold text-white outline-none w-48"
+                disabled={isRenamingTitle}
+                className="bg-zinc-950 border border-zinc-700 rounded px-2 py-0.5 text-sm font-semibold text-white outline-none w-48 disabled:opacity-60"
               />
             ) : (
               <div
-                onClick={() => !isReadOnly && setIsEditingTitle(true)}
+                onClick={() => !isReadOnly && !isRenamingTitle && setIsEditingTitle(true)}
                 className={`flex items-center gap-1.5 truncate group ${
                   !isReadOnly ? 'cursor-pointer' : ''
                 }`}
@@ -923,8 +998,12 @@ function WorkspaceInner({
                 <span className="font-semibold text-sm text-zinc-100 truncate group-hover:text-zinc-200 transition-colors">
                   {fileName}
                 </span>
-                {!isReadOnly && (
-                  <Edit2 className="h-3 w-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                {isRenamingTitle ? (
+                  <Spinner className="h-3 w-3 text-zinc-400" />
+                ) : (
+                  !isReadOnly && (
+                    <Edit2 className="h-3 w-3 text-zinc-500 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0" />
+                  )
                 )}
               </div>
             )}
@@ -935,6 +1014,52 @@ function WorkspaceInner({
             >
               {role}
             </Badge>
+
+            {/* Dialect Switcher */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={isReadOnly}
+                  className="h-6 px-2 text-[11px] font-medium border-zinc-800 bg-zinc-900/80 text-zinc-300 hover:text-white flex items-center gap-1.5"
+                  title="Switch SQL Dialect"
+                >
+                  <Database className="h-3 w-3 text-indigo-400" />
+                  <span>{SUPPORTED_DIALECTS[dialect]?.badgeLabel || dialect}</span>
+                  <ChevronDown className="h-3 w-3 opacity-60" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" className="w-64">
+                <DropdownMenuLabel className="text-xs">Database Dialect</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {DIALECT_OPTIONS.map((opt) => (
+                  <DropdownMenuItem
+                    key={opt.id}
+                    onClick={() => handleDialectSelect(opt.id)}
+                    className="flex flex-col items-start gap-0.5 cursor-pointer py-1.5"
+                  >
+                    <div className="flex items-center justify-between w-full">
+                      <span
+                        className={`text-xs font-medium ${
+                          dialect === opt.id
+                            ? 'text-indigo-400 font-semibold'
+                            : 'text-zinc-200'
+                        }`}
+                      >
+                        {opt.name}
+                      </span>
+                      {dialect === opt.id && (
+                        <Check className="h-3.5 w-3.5 text-indigo-400 flex-shrink-0" />
+                      )}
+                    </div>
+                    <span className="text-[10px] text-zinc-500 leading-tight">
+                      {opt.description}
+                    </span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
           </div>
         </div>
 
@@ -963,7 +1088,7 @@ function WorkspaceInner({
               </span>
             ) : !isYjsReady ? (
               <span className="flex items-center gap-1 text-zinc-500">
-                <span className="h-2 w-2 rounded-full bg-zinc-500 animate-pulse" />
+                <Spinner className="h-3 w-3 text-zinc-500" />
                 Syncing collaboration...
               </span>
             ) : collabStatus === 'disconnected' ? (
@@ -973,7 +1098,7 @@ function WorkspaceInner({
               </span>
             ) : saveStatus === 'saving' ? (
               <span className="flex items-center gap-1 text-zinc-400">
-                <span className="h-2 w-2 rounded-full bg-zinc-400 animate-ping" />
+                <Spinner className="h-3 w-3 text-zinc-400" />
                 Saving...
               </span>
             ) : saveStatus === 'saved' ? (
@@ -1023,19 +1148,28 @@ function WorkspaceInner({
               <Button
                 variant="outline"
                 size="sm"
+                disabled={exportingFormat !== null}
                 className="h-8 px-2.5 text-xs text-zinc-300 hover:text-white border-zinc-800 bg-zinc-900/60"
                 title="Export Schema"
               >
-                <Download className="h-3.5 w-3.5 mr-1" />
-                <span className="hidden sm:inline">Export</span>
+                {exportingFormat ? (
+                  <Spinner className="mr-1 h-3.5 w-3.5" />
+                ) : (
+                  <Download className="h-3.5 w-3.5 mr-1" />
+                )}
+                <span className="hidden sm:inline">
+                  {exportingFormat ? 'Exporting...' : 'Export'}
+                </span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel className="text-xs">Schema</DropdownMenuLabel>
-              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs">SQL DDL</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => void handleExportFormat('sql')}>
-                <FileCode className="h-3.5 w-3.5 mr-2 text-zinc-400" /> PostgreSQL SQL (.sql)
+                <FileCode className="h-3.5 w-3.5 mr-2 text-indigo-400" />
+                <span>SQL DDL ({SUPPORTED_DIALECTS[dialect]?.badgeLabel || dialect})</span>
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel className="text-xs">Schema Formats</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => void handleExportFormat('dbml')}>
                 <Braces className="h-3.5 w-3.5 mr-2 text-zinc-400" /> DBML (.dbml)
               </DropdownMenuItem>
@@ -1043,16 +1177,16 @@ function WorkspaceInner({
                 <Workflow className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Mermaid ER (.mmd)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void handleExportFormat('prisma')}>
-                <Database className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Prisma (.prisma)
+                <Database className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Prisma Schema (.prisma)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void handleExportFormat('drizzle')}>
-                <FileCode className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Drizzle (.ts)
+                <FileCode className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Drizzle Schema (.ts)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void handleExportFormat('json')}>
-                <FileJson className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Project JSON (.json)
+                <FileJson className="h-3.5 w-3.5 mr-2 text-zinc-400" /> Schematic Project (.json)
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuLabel className="text-xs">Diagram</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-xs">Diagram Image</DropdownMenuLabel>
               <DropdownMenuItem onClick={() => void handleExportFormat('png')}>
                 <ImageIcon className="h-3.5 w-3.5 mr-2 text-zinc-400" /> PNG image (.png)
               </DropdownMenuItem>
@@ -1081,6 +1215,7 @@ function WorkspaceInner({
               awareness={isYjsReady ? collab?.provider.awareness ?? null : null}
               onActivityChange={handleActivityChange}
               activeCollaborator={activeEditingCollaborator || null}
+              dialect={dialect}
             />
           </Panel>
 
@@ -1120,6 +1255,7 @@ function WorkspaceInner({
         open={isImportOpen}
         onOpenChange={setIsImportOpen}
         onImport={handleImportSql}
+        currentDialect={dialect}
       />
 
       {/* Share Modal Dialog */}

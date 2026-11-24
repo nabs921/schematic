@@ -11,26 +11,37 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { Upload, FileUp } from 'lucide-react';
 import { importDbmlToSql } from '@/lib/sql/exporters';
+import { type SqlDialect, detectSqlDialect, SUPPORTED_DIALECTS, DIALECT_OPTIONS } from '@/lib/sql/dialects';
 
 type ImportFormat = 'sql' | 'dbml' | 'json';
 
 interface ImportDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onImport: (sql: string) => void;
+  onImport: (sql: string, dialect?: SqlDialect) => void;
+  currentDialect?: SqlDialect;
 }
 
-export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps) {
+export function ImportDialog({
+  open,
+  onOpenChange,
+  onImport,
+  currentDialect = 'postgres',
+}: ImportDialogProps) {
   const [format, setFormat] = useState<ImportFormat>('sql');
+  const [selectedDialect, setSelectedDialect] = useState<SqlDialect | 'auto'>('auto');
   const [content, setContent] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [isReadingFile, setIsReadingFile] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reset = () => {
     setContent('');
     setError(null);
+    setSelectedDialect('auto');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
@@ -42,15 +53,24 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
   const handleFile = async (file: File | undefined) => {
     if (!file) return;
     setError(null);
+    setIsReadingFile(true);
     try {
       const text = await file.text();
       setContent(text);
       const extension = file.name.split('.').pop()?.toLowerCase();
-      if (extension === 'dbml') setFormat('dbml');
-      else if (extension === 'json') setFormat('json');
-      else setFormat('sql');
+      if (extension === 'dbml') {
+        setFormat('dbml');
+      } else if (extension === 'json') {
+        setFormat('json');
+      } else {
+        setFormat('sql');
+        const detected = detectSqlDialect(text);
+        setSelectedDialect(detected);
+      }
     } catch {
       setError('Could not read that file.');
+    } finally {
+      setIsReadingFile(false);
     }
   };
 
@@ -66,19 +86,29 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
 
     try {
       let sql = trimmed;
+      let finalDialect: SqlDialect =
+        selectedDialect === 'auto' ? detectSqlDialect(trimmed) : selectedDialect;
 
       if (format === 'dbml') {
-        sql = importDbmlToSql(trimmed);
+        finalDialect = currentDialect;
+        sql = importDbmlToSql(trimmed, finalDialect);
       } else if (format === 'json') {
-        const parsed = JSON.parse(trimmed) as { sql?: unknown };
+        const parsed = JSON.parse(trimmed) as { sql?: unknown; dialect?: unknown };
         if (typeof parsed.sql !== 'string' || !parsed.sql.trim()) {
           throw new Error('JSON files must contain a "sql" string.');
         }
         sql = parsed.sql;
+        if (typeof parsed.dialect === 'string' && parsed.dialect in SUPPORTED_DIALECTS) {
+          finalDialect = parsed.dialect as SqlDialect;
+        } else {
+          finalDialect = detectSqlDialect(sql);
+        }
       }
 
-      onImport(sql);
-      toast.success('Schema imported');
+      onImport(sql, finalDialect);
+      toast.success(
+        `Schema imported (${SUPPORTED_DIALECTS[finalDialect]?.name || 'SQL'})`
+      );
       reset();
       onOpenChange(false);
     } catch (err) {
@@ -95,8 +125,8 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
             Import Schema
           </DialogTitle>
           <DialogDescription>
-            Import PostgreSQL SQL, DBML, or a Schematic JSON export. The imported schema replaces
-            the current editor content for everyone in this room.
+            Import SQL (PostgreSQL, MySQL, SQLite, SQL Server, Oracle), DBML, or a Schematic JSON export.
+            The imported schema replaces the current editor content for everyone in this room.
           </DialogDescription>
         </DialogHeader>
 
@@ -114,10 +144,40 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
                       : 'text-zinc-400 hover:text-zinc-200'
                   }`}
                 >
-                  {option === 'sql' ? 'PostgreSQL SQL' : option.toUpperCase()}
+                  {option === 'sql' ? 'SQL DDL' : option.toUpperCase()}
                 </button>
               ))}
             </div>
+
+            {format === 'sql' && (
+              <div className="flex items-center gap-1 rounded-lg border border-zinc-800 bg-zinc-900/60 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setSelectedDialect('auto')}
+                  className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                    selectedDialect === 'auto'
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Auto-Detect
+                </button>
+                {DIALECT_OPTIONS.map((d) => (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() => setSelectedDialect(d.id)}
+                    className={`rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors ${
+                      selectedDialect === d.id
+                        ? 'bg-zinc-800 text-white'
+                        : 'text-zinc-400 hover:text-zinc-200'
+                    }`}
+                  >
+                    {d.badgeLabel}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <input
               ref={fileInputRef}
@@ -132,9 +192,14 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
               size="sm"
               className="h-8 border-zinc-800 bg-zinc-900/60 text-xs"
               onClick={() => fileInputRef.current?.click()}
+              disabled={isReadingFile}
             >
-              <FileUp className="mr-1.5 h-3.5 w-3.5" />
-              Choose file
+              {isReadingFile ? (
+                <Spinner className="mr-1.5 h-3.5 w-3.5" />
+              ) : (
+                <FileUp className="mr-1.5 h-3.5 w-3.5" />
+              )}
+              {isReadingFile ? 'Reading...' : 'Choose file'}
             </Button>
           </div>
 
@@ -166,7 +231,7 @@ export function ImportDialog({ open, onOpenChange, onImport }: ImportDialogProps
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={!content.trim()}>
+            <Button type="submit" disabled={!content.trim() || isReadingFile}>
               Import Schema
             </Button>
           </DialogFooter>

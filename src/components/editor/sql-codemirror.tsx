@@ -4,13 +4,14 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { EditorState, Compartment } from '@codemirror/state';
 import { EditorView, keymap, lineNumbers, highlightActiveLineGutter, highlightActiveLine } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
-import { sql, PostgreSQL } from '@codemirror/lang-sql';
+import { sql, PostgreSQL, MySQL, SQLite, MSSQL, PLSQL } from '@codemirror/lang-sql';
 import { oneDark } from '@codemirror/theme-one-dark';
 import { linter, lintGutter, Diagnostic } from '@codemirror/lint';
 import { yCollab, ySyncAnnotation, yUndoManagerKeymap } from 'y-codemirror.next';
 import type * as Y from 'yjs';
 import type { WebsocketProvider } from 'y-websocket';
 import { SqlParseError } from '@/lib/sql/parser';
+import { type SqlDialect, SUPPORTED_DIALECTS } from '@/lib/sql/dialects';
 import type { Collaborator } from '@/components/collaboration/collaborator-avatars';
 import { Button } from '@/components/ui/button';
 import {
@@ -43,6 +44,23 @@ interface SqlCodeMirrorProps {
   awareness?: WebsocketProvider['awareness'] | null;
   onActivityChange?: (activity: string) => void;
   activeCollaborator?: Collaborator | null;
+  dialect?: SqlDialect;
+}
+
+function getCodeMirrorSqlDialect(dialect: SqlDialect) {
+  switch (dialect) {
+    case 'mysql':
+      return MySQL;
+    case 'sqlite':
+      return SQLite;
+    case 'mssql':
+      return MSSQL;
+    case 'oracle':
+      return PLSQL;
+    case 'postgres':
+    default:
+      return PostgreSQL;
+  }
 }
 
 export function SqlCodeMirror({
@@ -57,10 +75,12 @@ export function SqlCodeMirror({
   awareness = null,
   onActivityChange,
   activeCollaborator,
+  dialect = 'postgres',
 }: SqlCodeMirrorProps) {
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const readOnlyCompartment = useRef(new Compartment());
+  const dialectCompartment = useRef(new Compartment());
 
   const [showDiagnosticsDrawer, setShowDiagnosticsDrawer] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -100,14 +120,17 @@ export function SqlCodeMirror({
     if (!viewRef.current || readOnly) return;
     const currentDoc = viewRef.current.state.doc.toString();
 
-    // Uppercase SQL keywords and normalize statements
+    // Uppercase SQL keywords and normalize statements across dialects
     const keywords = [
       'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'SET',
       'DELETE', 'CREATE', 'TABLE', 'ALTER', 'DROP', 'PRIMARY', 'KEY', 'FOREIGN',
       'REFERENCES', 'CONSTRAINT', 'DEFAULT', 'NOT', 'NULL', 'UNIQUE', 'CHECK',
-      'CASCADE', 'RESTRICT', 'SERIAL', 'INT', 'INTEGER', 'BIGINT', 'VARCHAR',
-      'TEXT', 'BOOLEAN', 'TIMESTAMP', 'WITH', 'TIME', 'ZONE', 'UUID', 'JSONB',
-      'ON', 'AND', 'OR', 'INDEX', 'EXISTS', 'IF'
+      'CASCADE', 'RESTRICT', 'SERIAL', 'INT', 'INTEGER', 'BIGINT', 'TINYINT',
+      'MEDIUMINT', 'VARCHAR', 'VARCHAR2', 'NVARCHAR', 'NVARCHAR2', 'NUMBER',
+      'TEXT', 'NTEXT', 'CLOB', 'BLOB', 'BOOLEAN', 'TIMESTAMP', 'WITH', 'TIME',
+      'ZONE', 'UUID', 'JSONB', 'DATETIME', 'DATETIME2', 'IDENTITY', 'AUTO_INCREMENT',
+      'AUTOINCREMENT', 'ENGINE', 'INNODB', 'GENERATED', 'ALWAYS', 'ON', 'AND',
+      'OR', 'INDEX', 'EXISTS', 'IF'
     ];
 
     let formatted = currentDoc;
@@ -198,7 +221,7 @@ export function SqlCodeMirror({
       lineNumbers(),
       highlightActiveLineGutter(),
       highlightActiveLine(),
-      sql({ dialect: PostgreSQL }),
+      dialectCompartment.current.of(sql({ dialect: getCodeMirrorSqlDialect(dialect) })),
       oneDark,
       lintGutter(),
       sqlLinter,
@@ -250,7 +273,7 @@ export function SqlCodeMirror({
       view.destroy();
       viewRef.current = null;
     };
-  }, [ytext, awareness, readOnly, initialValue]);
+  }, [ytext, awareness, readOnly, initialValue, dialect]);
 
   // Update read-only state if prop changes
   useEffect(() => {
@@ -264,6 +287,16 @@ export function SqlCodeMirror({
     }
   }, [readOnly]);
 
+  // Update SQL syntax dialect if prop changes
+  useEffect(() => {
+    if (viewRef.current) {
+      const cmDialect = getCodeMirrorSqlDialect(dialect);
+      viewRef.current.dispatch({
+        effects: dialectCompartment.current.reconfigure(sql({ dialect: cmDialect })),
+      });
+    }
+  }, [dialect]);
+
   return (
     <div className="h-full w-full flex flex-col bg-[#090d16] border-r border-zinc-800 select-none">
       {/* Editor Header Toolbar */}
@@ -271,7 +304,7 @@ export function SqlCodeMirror({
         <div className="flex items-center gap-2">
           <div className="flex items-center gap-1.5 text-xs font-semibold text-zinc-300">
             <Code2 className="h-3.5 w-3.5 text-indigo-400" />
-            <span>PostgreSQL DDL</span>
+            <span>{SUPPORTED_DIALECTS[dialect]?.badgeLabel || 'SQL'} DDL</span>
           </div>
 
           {isConnecting ? (

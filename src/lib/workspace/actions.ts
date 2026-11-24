@@ -29,6 +29,7 @@ import {
   removeFolderMember,
 } from '@/lib/db/queries/permissions';
 import { SCHEMA_TEMPLATES } from './templates';
+import { type SqlDialect } from '@/lib/sql/dialects';
 import { getNotificationFeed, markNotificationsSeen } from '@/lib/db/queries/notifications';
 import { restoreCollabAccess, revokeCollabAccess } from '@/lib/collab/access';
 import { revalidatePath } from 'next/cache';
@@ -51,6 +52,7 @@ export async function createFileAction(formData: FormData) {
   const name = formData.get('name')?.toString().trim() || 'Untitled Schema';
   const folderId = formData.get('folderId')?.toString() || null;
   const templateKey = formData.get('templateKey')?.toString() || 'ecommerce';
+  const dialect = (formData.get('dialect')?.toString() as SqlDialect) || 'postgres';
 
   // Check folder permission if creating in a folder
   if (folderId) {
@@ -68,6 +70,7 @@ export async function createFileAction(formData: FormData) {
     folderId,
     ownerId: user.id,
     sqlContent: sql,
+    canvasData: { dialect },
   });
 
   revalidatePath('/dashboard');
@@ -221,6 +224,7 @@ interface CanvasStatePayload {
     position: { x: number; y: number };
   }>;
   positions?: Record<string, { x: number; y: number }>;
+  dialect?: SqlDialect;
 }
 
 export async function saveFileStateAction(
@@ -242,8 +246,13 @@ export async function saveFileStateAction(
     if (canvasData.notes && Array.isArray(canvasData.notes)) {
       promises.push(syncCanvasNotes(fileId, canvasData.notes));
     }
-    // Still save positions to canvas_data JSONB
-    promises.push(updateFileCanvas(fileId, { positions: canvasData.positions }));
+    // Save positions and active dialect to canvas_data JSONB
+    promises.push(
+      updateFileCanvas(fileId, {
+        positions: canvasData.positions,
+        dialect: canvasData.dialect,
+      })
+    );
   }
 
   await Promise.all(promises);

@@ -3,6 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import { X, MessageSquare, Check, RotateCcw, Trash2, CornerDownRight, Eye } from 'lucide-react';
 import { useComments } from './comments-context';
 import { commentTargetKey } from './types';
@@ -41,10 +42,12 @@ function CommentAuthor({ comment }: { comment: FileComment }) {
 function CommentRow({
   comment,
   canDelete,
+  isDeleting,
   onDelete,
 }: {
   comment: FileComment;
   canDelete: boolean;
+  isDeleting: boolean;
   onDelete: () => void;
 }) {
   return (
@@ -58,10 +61,15 @@ function CommentRow({
           {canDelete && (
             <button
               onClick={onDelete}
-              className="text-zinc-600 hover:text-red-400 opacity-0 group-hover/comment:opacity-100 transition-opacity p-0.5"
+              disabled={isDeleting}
+              className="text-zinc-600 hover:text-red-400 opacity-0 group-hover/comment:opacity-100 transition-opacity p-0.5 disabled:pointer-events-none disabled:opacity-100"
               title="Delete comment"
             >
-              <Trash2 className="h-3 w-3" />
+              {isDeleting ? (
+                <Spinner className="h-3 w-3" />
+              ) : (
+                <Trash2 className="h-3 w-3" />
+              )}
             </button>
           )}
         </div>
@@ -84,6 +92,10 @@ function ThreadCard({
   const { currentUserId, addComment, deleteComment, setResolved } = useComments();
   const [replyText, setReplyText] = useState('');
   const [showReply, setShowReply] = useState(false);
+  const [isReplying, setIsReplying] = useState(false);
+  const [isResolving, setIsResolving] = useState(false);
+  const [isDeletingThread, setIsDeletingThread] = useState(false);
+  const [deletingCommentId, setDeletingCommentId] = useState<string | null>(null);
 
   const root = thread.comments[0];
   const canDeleteThread = canComment && root.userId === currentUserId;
@@ -91,39 +103,53 @@ function ThreadCard({
   const handleReply = async (e: React.FormEvent) => {
     e.preventDefault();
     const text = replyText.trim();
-    if (!text || !canComment) return;
+    if (!text || !canComment || isReplying) return;
 
+    setIsReplying(true);
     try {
       await addComment(thread.target, text, root.id);
       setReplyText('');
       setShowReply(false);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add reply');
+    } finally {
+      setIsReplying(false);
     }
   };
 
   const handleResolve = async () => {
+    if (isResolving) return;
+    setIsResolving(true);
     try {
       await setResolved(root.id, !thread.resolved);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update thread');
+    } finally {
+      setIsResolving(false);
     }
   };
 
   const handleDeleteThread = async () => {
+    if (isDeletingThread) return;
+    setIsDeletingThread(true);
     try {
       await deleteComment(root.id);
       toast.success('Thread deleted');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete thread');
+    } finally {
+      setIsDeletingThread(false);
     }
   };
 
   const handleDeleteComment = async (commentId: string) => {
+    setDeletingCommentId(commentId);
     try {
       await deleteComment(commentId);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to delete comment');
+    } finally {
+      setDeletingCommentId(null);
     }
   };
 
@@ -151,11 +177,14 @@ function ThreadCard({
         <div className="flex items-center gap-1 flex-shrink-0">
           {canComment && (
             <button
-              onClick={handleResolve}
-              className="rounded-md p-1 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+              onClick={() => void handleResolve()}
+              disabled={isResolving}
+              className="rounded-md p-1 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 disabled:opacity-60 disabled:pointer-events-none"
               title={thread.resolved ? 'Reopen thread' : 'Resolve thread'}
             >
-              {thread.resolved ? (
+              {isResolving ? (
+                <Spinner className="h-3.5 w-3.5" />
+              ) : thread.resolved ? (
                 <RotateCcw className="h-3.5 w-3.5" />
               ) : (
                 <Check className="h-3.5 w-3.5" />
@@ -164,11 +193,16 @@ function ThreadCard({
           )}
           {canDeleteThread && (
             <button
-              onClick={handleDeleteThread}
-              className="rounded-md p-1 text-zinc-500 hover:text-red-400 hover:bg-red-950/40"
+              onClick={() => void handleDeleteThread()}
+              disabled={isDeletingThread}
+              className="rounded-md p-1 text-zinc-500 hover:text-red-400 hover:bg-red-950/40 disabled:opacity-60 disabled:pointer-events-none"
               title="Delete thread"
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              {isDeletingThread ? (
+                <Spinner className="h-3.5 w-3.5" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
             </button>
           )}
         </div>
@@ -180,7 +214,8 @@ function ThreadCard({
             key={comment.id}
             comment={comment}
             canDelete={canComment && comment.userId === currentUserId}
-            onDelete={() => handleDeleteComment(comment.id)}
+            isDeleting={deletingCommentId === comment.id}
+            onDelete={() => void handleDeleteComment(comment.id)}
           />
         ))}
       </div>
@@ -195,7 +230,8 @@ function ThreadCard({
                 placeholder="Write a reply..."
                 rows={2}
                 autoFocus
-                className="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
+                disabled={isReplying}
+                className="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700 disabled:opacity-60"
               />
               <div className="flex items-center justify-end gap-2">
                 <button
@@ -204,12 +240,25 @@ function ThreadCard({
                     setShowReply(false);
                     setReplyText('');
                   }}
-                  className="px-2 py-1 text-[11px] text-zinc-400 hover:text-zinc-200"
+                  disabled={isReplying}
+                  className="px-2 py-1 text-[11px] text-zinc-400 hover:text-zinc-200 disabled:opacity-60"
                 >
                   Cancel
                 </button>
-                <Button type="submit" size="sm" disabled={!replyText.trim()} className="h-7 text-[11px]">
-                  Reply
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={!replyText.trim() || isReplying}
+                  className="h-7 text-[11px]"
+                >
+                  {isReplying ? (
+                    <>
+                      <Spinner className="mr-1.5 h-3 w-3" />
+                      Replying...
+                    </>
+                  ) : (
+                    'Reply'
+                  )}
                 </Button>
               </div>
             </form>
@@ -237,6 +286,7 @@ export function CommentsPanel({ readOnly, canComment }: CommentsPanelProps) {
     addComment,
   } = useComments();
   const [draft, setDraft] = useState('');
+  const [isCreatingThread, setIsCreatingThread] = useState(false);
 
   const targetLabel = useMemo(() => {
     if (!activeTarget) return '';
@@ -247,15 +297,18 @@ export function CommentsPanel({ readOnly, canComment }: CommentsPanelProps) {
 
   const handleCreateThread = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!activeTarget || !canComment) return;
+    if (!activeTarget || !canComment || isCreatingThread) return;
     const text = draft.trim();
     if (!text) return;
 
+    setIsCreatingThread(true);
     try {
       await addComment(commentTargetKey(activeTarget), text);
       setDraft('');
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to add comment');
+    } finally {
+      setIsCreatingThread(false);
     }
   };
 
@@ -290,7 +343,10 @@ export function CommentsPanel({ readOnly, canComment }: CommentsPanelProps) {
 
       <div className="flex-1 space-y-2 overflow-y-auto p-3">
         {isLoading && activeThreads.length === 0 ? (
-          <div className="py-8 text-center text-xs text-zinc-500">Loading comments...</div>
+          <div className="flex items-center justify-center gap-2 py-8 text-xs text-zinc-500">
+            <Spinner className="h-3.5 w-3.5" />
+            Loading comments...
+          </div>
         ) : error ? (
           <div className="rounded-lg border border-red-900/60 bg-red-950/40 p-2.5 text-xs text-red-300">
             {error.message}
@@ -323,11 +379,24 @@ export function CommentsPanel({ readOnly, canComment }: CommentsPanelProps) {
             onChange={(e) => setDraft(e.target.value)}
             placeholder={`Comment on ${targetLabel}...`}
             rows={2}
-            className="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700"
+            disabled={isCreatingThread}
+            className="w-full resize-none rounded-lg border border-zinc-800 bg-zinc-900/60 p-2 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700 disabled:opacity-60"
           />
           <div className="mt-2 flex justify-end">
-            <Button type="submit" size="sm" disabled={!draft.trim()} className="h-7 text-[11px]">
-              Comment
+            <Button
+              type="submit"
+              size="sm"
+              disabled={!draft.trim() || isCreatingThread}
+              className="h-7 text-[11px]"
+            >
+              {isCreatingThread ? (
+                <>
+                  <Spinner className="mr-1.5 h-3 w-3" />
+                  Commenting...
+                </>
+              ) : (
+                'Comment'
+              )}
             </Button>
           </div>
         </form>

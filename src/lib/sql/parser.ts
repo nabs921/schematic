@@ -1,4 +1,8 @@
 import { Parser } from '@dbml/core';
+import { type SqlDialect, detectSqlDialect } from './dialects';
+
+export type { SqlDialect };
+export { detectSqlDialect };
 
 export interface ColumnDefinition {
   name: string;
@@ -47,10 +51,28 @@ export interface ParseResult {
   errors: SqlParseError[];
 }
 
+function parseWithDialect(sql: string, dialect: SqlDialect) {
+  if (dialect === 'sqlite') {
+    const normalized = sql
+      .replace(/\bAUTOINCREMENT\b/gi, '')
+      .replace(/\bWITHOUT\s+ROWID\b/gi, '')
+      .replace(/\bSTRICT\b/gi, '');
+    try {
+      return Parser.parse(normalized, 'postgres');
+    } catch {
+      return Parser.parse(normalized, 'mysql');
+    }
+  }
+
+  const dbmlDialect = dialect === 'postgres' ? 'postgres' : dialect;
+  return Parser.parse(sql, dbmlDialect);
+}
+
 /**
- * Safely parses PostgreSQL DDL into a structured schema AST using @dbml/core.
+ * Safely parses SQL DDL from multiple dialects (PostgreSQL, MySQL, SQLite, SQL Server, Oracle)
+ * into a structured schema AST using @dbml/core.
  */
-export function parseSqlSchema(sql: string): ParseResult {
+export function parseSqlSchema(sql: string, dialect: SqlDialect = 'postgres'): ParseResult {
   if (!sql || !sql.trim()) {
     return {
       success: true,
@@ -60,7 +82,7 @@ export function parseSqlSchema(sql: string): ParseResult {
   }
 
   try {
-    const database = Parser.parse(sql, 'postgres');
+    const database = parseWithDialect(sql, dialect);
     const tables: TableDefinition[] = [];
     const relationships: RelationshipDefinition[] = [];
 
@@ -132,10 +154,22 @@ export function parseSqlSchema(sql: string): ParseResult {
           pkEp = ep0;
         }
 
-        const sourceTable = fkEp.tableName;
-        const sourceCol = fkEp.fieldNames?.[0] || '';
-        const targetTable = pkEp.tableName;
-        const targetCol = pkEp.fieldNames?.[0] || '';
+        const sourceTable =
+          fkEp.tableName ||
+          (fkEp as unknown as { fields?: Array<{ table?: { name?: string } }> }).fields?.[0]?.table?.name ||
+          '';
+        const sourceCol =
+          fkEp.fieldNames?.[0] ||
+          (fkEp as unknown as { fields?: Array<{ name?: string }> }).fields?.[0]?.name ||
+          '';
+        const targetTable =
+          pkEp.tableName ||
+          (pkEp as unknown as { fields?: Array<{ table?: { name?: string } }> }).fields?.[0]?.table?.name ||
+          '';
+        const targetCol =
+          pkEp.fieldNames?.[0] ||
+          (pkEp as unknown as { fields?: Array<{ name?: string }> }).fields?.[0]?.name ||
+          '';
 
         // Mark column as foreign key in table definition
         const sourceTableDef = tables.find((t) => t.name === sourceTable);

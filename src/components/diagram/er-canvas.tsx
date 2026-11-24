@@ -23,6 +23,7 @@ import { NoteNode } from './note-node';
 import { ParsedSchema } from '@/lib/sql/parser';
 import { layoutSchema } from '@/lib/layout/elk-layout';
 import { Button } from '@/components/ui/button';
+import { Spinner } from '@/components/ui/spinner';
 import {
   Sparkles,
   Maximize2,
@@ -92,6 +93,7 @@ function ErCanvasInternal({
   const [edges, setEdges, onEdgesChangeHandler] = useEdgesState<Edge>([]);
   const [showMinimap, setShowMinimap] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
+  const [isLayouting, setIsLayouting] = useState(false);
 
   // Keep track of the last valid schema without mutating a ref during render.
   const lastValidSchemaRef = useRef<ParsedSchema | null>(schema);
@@ -284,33 +286,41 @@ function ErCanvasInternal({
   // Explicit Auto Layout Button (resets positions via ELK)
   const handleAutoLayout = useCallback(async () => {
     const activeSchema = schema || lastValidSchemaRef.current;
-    if (!activeSchema) return;
+    if (!activeSchema || isLayouting) return;
 
-    onPositionsChange?.({});
+    setIsLayouting(true);
+    try {
+      onPositionsChange?.({});
 
-    const { nodes: tableNodes, edges: relEdges } = await layoutSchema(activeSchema, undefined);
+      const { nodes: tableNodes, edges: relEdges } = await layoutSchema(activeSchema, undefined);
 
-    const noteNodes: Node[] = notes.map((note) => ({
-      id: note.id,
-      type: 'noteNode',
-      position: note.position,
-      data: {
-        title: note.title,
-        content: note.content,
-        color: note.color,
-        readOnly,
-        onUpdate: handleUpdateNote,
-        onDelete: handleDeleteNote,
-      },
-    }));
+      const noteNodes: Node[] = notes.map((note) => ({
+        id: note.id,
+        type: 'noteNode',
+        position: note.position,
+        data: {
+          title: note.title,
+          content: note.content,
+          color: note.color,
+          readOnly,
+          onUpdate: handleUpdateNote,
+          onDelete: handleDeleteNote,
+        },
+      }));
 
-    setNodes([...tableNodes, ...noteNodes]);
-    setEdges(relEdges);
+      setNodes([...tableNodes, ...noteNodes]);
+      setEdges(relEdges);
 
-    setTimeout(() => {
-      fitView({ padding: 0.2, duration: 400 });
-    }, 50);
-  }, [schema, notes, readOnly, handleUpdateNote, handleDeleteNote, onPositionsChange, setNodes, setEdges, fitView]);
+      setTimeout(() => {
+        fitView({ padding: 0.2, duration: 400 });
+      }, 50);
+    } catch (err) {
+      console.error('Auto layout failed:', err);
+      toast.error('Failed to arrange the diagram');
+    } finally {
+      setIsLayouting(false);
+    }
+  }, [schema, isLayouting, notes, readOnly, handleUpdateNote, handleDeleteNote, onPositionsChange, setNodes, setEdges, fitView]);
 
   // Export PNG
   const handleExportPng = useCallback(async () => {
@@ -351,14 +361,19 @@ function ErCanvasInternal({
       <div className="absolute top-4 right-4 z-20 flex items-center gap-2 bg-zinc-900/90 border border-zinc-800 backdrop-blur-md rounded-xl p-1.5 shadow-2xl shadow-black/80">
         {!readOnly && (
           <Button
-            onClick={handleAutoLayout}
+            onClick={() => void handleAutoLayout()}
             size="sm"
             variant="ghost"
+            disabled={isLayouting}
             className="h-7 px-2.5 text-xs text-zinc-300 hover:text-white hover:bg-zinc-800 flex items-center gap-1.5"
             title="Auto arrange tables with ELK.js"
           >
-            <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
-            <span>Auto Layout</span>
+            {isLayouting ? (
+              <Spinner className="h-3.5 w-3.5 text-indigo-400" />
+            ) : (
+              <Sparkles className="h-3.5 w-3.5 text-indigo-400" />
+            )}
+            <span>{isLayouting ? 'Arranging...' : 'Auto Layout'}</span>
           </Button>
         )}
 
@@ -400,14 +415,18 @@ function ErCanvasInternal({
         </Button>
 
         <Button
-          onClick={handleExportPng}
+          onClick={() => void handleExportPng()}
           size="icon"
           variant="ghost"
           disabled={isExporting}
           className="h-7 w-7 text-zinc-400 hover:text-white hover:bg-zinc-800"
           title="Export diagram as PNG"
         >
-          <Download className="h-3.5 w-3.5" />
+          {isExporting ? (
+            <Spinner className="h-3.5 w-3.5" />
+          ) : (
+            <Download className="h-3.5 w-3.5" />
+          )}
         </Button>
       </div>
 

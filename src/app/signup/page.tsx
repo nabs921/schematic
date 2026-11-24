@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { signUp } from '@/lib/auth/actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Spinner } from '@/components/ui/spinner';
 
 export default function SignUpPage() {
   const [state, formAction, isPending] = useActionState(signUp, null);
@@ -76,7 +77,14 @@ export default function SignUpPage() {
               disabled={isPending}
               className="w-full bg-zinc-700 hover:bg-zinc-600 text-white font-medium py-2 rounded-lg"
             >
-              {isPending ? 'Creating account...' : 'Create account'}
+              {isPending ? (
+                <>
+                  <Spinner className="mr-2" />
+                  Creating account...
+                </>
+              ) : (
+                'Create account'
+              )}
             </Button>
           </form>
 
